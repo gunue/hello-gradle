@@ -1,0 +1,65 @@
+pipeline {
+    agent any
+
+    environment {
+        //DOCKER_CREDENTIALS = 'r-app-1'
+        IMAGE_NAME = 'harbor.swo.local/engin/java-hello'
+        IMAGE_TAG = 'latest'
+        DOCKER_REGISTRY_URL = 'https://harbor.swo.local'
+        TL_CONSOLE='twistlock-console.swo.local:8083'
+    }
+
+    stages {
+        stage('Checkout Source') {
+            steps {
+                git url: 'https://github.com/gunue/hello-gradle.git', credentialsId: 'r-app-1', branch: 'main'
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                script {
+                    docker.withRegistry('') {
+                        def customImage = docker.build("${IMAGE_NAME}:${IMAGE_TAG}", '.')
+                    }
+                }
+            }
+        }
+        stage('Prisma Cloud Image Scan') {
+            steps {
+                script {
+                    withCredentials([usernamePassword(credentialsId: 'prismaapiuser', usernameVariable: 'TL_USER', passwordVariable: 'TL_PASS')]) {
+                        sh 'twistcli images scan ${IMAGE_NAME} --repository Engin --address https://$TL_CONSOLE -u $TL_USER -p $TL_PASS --details'
+                    }
+                }
+            }
+        }
+        stage('Prisma Cloud Code Scan') {
+            steps {
+                script {
+                    withCredentials([usernamePassword(credentialsId: 'prismaapiuser', usernameVariable: 'TL_USER', passwordVariable: 'TL_PASS')]) {
+                        sh 'twistcli coderepo scan . --repository Engin --address https://$TL_CONSOLE -u $TL_USER -p $TL_PASS --details'
+                    }
+                }
+            }
+        }
+        stage('Push Docker Image') {
+            steps {
+                script {
+                    withCredentials([usernamePassword(credentialsId: 'harbor-swo', usernameVariable: 'DOCKER_REGISTRY_USERNAME', passwordVariable: 'DOCKER_REGISTRY_PASSWORD')]) {
+                        sh "docker login -u ${DOCKER_REGISTRY_USERNAME} -p ${DOCKER_REGISTRY_PASSWORD} ${DOCKER_REGISTRY_URL}"
+                        def customImage = docker.image("${IMAGE_NAME}:${IMAGE_TAG}")
+                        customImage.push()
+                        sh "docker logout ${DOCKER_REGISTRY_URL}"
+                    }
+                }
+            }
+        }      
+        stage('Cleaning up') {
+            steps{
+            sh "docker rmi ${IMAGE_NAME}:${IMAGE_TAG}"
+            }
+        }
+    }
+}
+
