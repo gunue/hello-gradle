@@ -1,0 +1,83 @@
+# Docker
+# Build a Docker image
+# https://docs.microsoft.com/azure/devops/pipelines/languages/docker
+
+trigger:
+- master
+
+resources:
+- repo: self
+
+variables:
+  HARBOR_CONNECT: HARBOR_CONNECT
+#  IMAGE_NAME: 'gunayeng/java-hello'
+  IMAGE_NAME: 'engin/java-hello'
+  TL_CONSOLE: 'prisma-console.swo.local:8083'
+  IMAGE_TAG: '$(Build.BuildId)'
+  REGISTRY: 'harbor.swo.local'
+
+stages:
+- stage: Build
+  displayName: Build image
+  jobs:
+  - job: Build
+    displayName: Build
+    pool:
+      name: Linux
+    steps:
+    - script: |
+        whoami
+      displayName: Show who
+    - task: Docker@2
+      displayName: Build Image
+      inputs:
+        command: build
+        dockerfile: '$(Build.SourcesDirectory)/Dockerfile'
+        tags: |
+          $(IMAGE_TAG)
+        repository: $(IMAGE_NAME)
+        containerRegistry: $(HARBOR_CONNECT)
+    - script: |
+        TCLI_VERSION=$(~/twistcli | grep -A1 VERSION | sed 1d)
+        CONSOLE_VERSION=$(curl -k -u $TL_USER:$TL_PASS https://$TL_CONSOLE/api/v1/version | tr -d '"')
+        echo "TCLI_VERSION = $TCLI_VERSION"
+        echo "CONSOLE_VERSION = $CONSOLE_VERSION"
+        if [ "$TCLI_VERSION" != "$CONSOLE_VERSION" ]; then
+          echo "downloading twistcli"
+          curl -s -k -u $TL_USER:$TL_PASS --output ~/twistcli https://$TL_CONSOLE/api/v1/util/twistcli
+          chmod a+x ~/twistcli
+        fi
+      displayName: 'Check twistcli version'
+      env:
+        TL_USER: $(TL_USER)
+        TL_PASS: $(TL_PASS)
+        TL_CONSOLE: $(TL_CONSOLE)
+    - script: |
+        ~/twistcli images scan --address https://$TL_CONSOLE -u $TL_USER -p $TL_PASS --details $(REGISTRY)/$(IMAGE_NAME):$(IMAGE_TAG)
+      displayName: 'Scan with Twistcli'
+      env:
+        TL_USER: $(TL_USER)
+        TL_PASS: $(TL_PASS)
+        TL_CONSOLE: $(TL_CONSOLE)
+        IMAGE: $(IMAGE_NAME):$(IMAGE_TAG)
+    - task: Docker@2
+      displayName: Push Image If Scans are OK
+      inputs:
+        command: push
+        dockerfile: '$(Build.SourcesDirectory)/Dockerfile'
+        tags: |
+          $(IMAGE_TAG)
+        repository: $(IMAGE_NAME)
+        containerRegistry: $(HARBOR_CONNECT)
+
+- stage: Cleanup
+  displayName: Cleanup Resources
+  jobs:
+  - job: Cleanup
+    displayName: Cleanup
+    pool:
+      name: Linux
+    steps:
+    - script: |
+        docker rmi $(REGISTRY)/$(IMAGE_NAME):$(IMAGE_TAG)
+      displayName: 'Removing Docker Image'
